@@ -17,12 +17,12 @@ with open("README.md", "r", encoding="utf-8") as f:
 setup(
     name='jesse-optuna',
     version=VERSION,
-    author="cryptocoinserver",
+    author="TheTiEr",
     packages=find_packages(),
     description=DESCRIPTION,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/cryptocoinserver/jesse-optuna",
+    url="https://github.com/TheTiEr/jesse-optuna",
     install_requires=REQUIRED_PACKAGES,
     entry_points='''
         [console_scripts]
