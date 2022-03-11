@@ -5,6 +5,7 @@ import pathlib
 import pickle
 import shutil
 import traceback
+import psutil, gc
 
 import click
 import jesse.helpers as jh
@@ -16,6 +17,11 @@ import yaml
 from jesse.research import backtest, get_candles
 from .JoblilbStudy import JoblibStudy
 
+ps = psutil.Process()
+def memory_usage_psutil():
+    gc.collect()
+    mem = ps.memory_percent()
+    return mem
 
 logger = logging.getLogger()
 logger.addHandler(logging.FileHandler("jesse-optuna.log", mode="w"))
@@ -176,6 +182,7 @@ def get_search_space(strategy_hps):
     return hp
 
 def objective(trial):
+    print('pre objective', memory_usage_psutil())
     cfg = get_config()
 
     StrategyClass = jh.get_strategy_class(cfg['strategy_name'])
@@ -205,10 +212,16 @@ def objective(trial):
 
 
     if training_data_metrics is None:
+        del training_data_metrics, cfg, StrategyClass, hp_dict
+        gc.collect()
+        print('nan1 objective', memory_usage_psutil())
         return np.nan
 
 
     if training_data_metrics['total'] <= 5:
+        del training_data_metrics, cfg, StrategyClass, hp_dict
+        gc.collect()
+        print('nan2 objective', memory_usage_psutil())
         return np.nan
 
     total_effect_rate = np.log10(training_data_metrics['total']) / np.log10(cfg['optimal-total'])
@@ -240,6 +253,10 @@ def objective(trial):
             f'The entered ratio configuration `{ratio_config}` for the optimization is unknown. Choose between sharpe, calmar, sortino, serenity, smart shapre, smart sortino and omega.')
     
     if ratio < 2 or training_data_metrics['max_drawdown'] < -2:
+        del training_data_metrics, cfg, StrategyClass, hp_dict
+        del ratio, total_effect_rate, ratio_config, ratio_normalized
+        gc.collect()
+        print('nan3 objective', memory_usage_psutil())
         return np.nan
 
     score = total_effect_rate * ratio_normalized
@@ -251,6 +268,11 @@ def objective(trial):
         raise err
 
     if testing_data_metrics is None:
+        del training_data_metrics, cfg, StrategyClass, hp_dict
+        del ratio, total_effect_rate, ratio_config, ratio_normalized
+        del testing_data_metrics
+        gc.collect()
+        print('nan4 objective', memory_usage_psutil())
         return np.nan
 
     for key, value in testing_data_metrics.items():
@@ -288,6 +310,11 @@ def objective(trial):
         writer = csv.writer(f, delimiter='\t')
         fields = parameter_dict.values()
         writer.writerow(fields)
+    del training_data_metrics
+    del testing_data_metrics
+    del parameter_dict
+    gc.collect()
+    print('post objective', memory_usage_psutil())
     return score
 
 def validate_cwd() -> None:
@@ -321,10 +348,10 @@ def get_candles_with_cache(exchange: str, symbol: str, start_date: str, finish_d
 
 
 def backtest_function(start_date, finish_date, hp, cfg):
-
     candles = {}
     extra_routes = []
-    if len(cfg['extra_routes']) != 0:
+    print('pre candles', memory_usage_psutil())
+    if (cfg['extra_routes']) is not None:
         for extra_route in cfg['extra_routes'].items():
             extra_route = extra_route[1]
             candles[jh.key(extra_route['exchange'], extra_route['symbol'])] = {
@@ -363,9 +390,22 @@ def backtest_function(start_date, finish_date, hp, cfg):
         'warm_up_candles': cfg['warm_up_candles']
     }
 
-
+    print('pre backtest', memory_usage_psutil())
     backtest_data = backtest(config, route, extra_routes, candles, hp)['metrics']
-
+    print('post backtest', memory_usage_psutil())
+    del candles
+    gc.collect()
+    print('post del candles', memory_usage_psutil())
+    del route
+    gc.collect()
+    print('post del route', memory_usage_psutil())
+    del extra_routes
+    gc.collect()
+    print('post del extra_routes', memory_usage_psutil())
+    del config
+    gc.collect()
+    print('post del config', memory_usage_psutil())
+    gc.collect()
     if backtest_data['total'] == 0:
         backtest_data = {'total': 0, 'total_winning_trades': None, 'total_losing_trades': None,
                          'starting_balance': None, 'finishing_balance': None, 'win_rate': None,

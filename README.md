@@ -15,6 +15,8 @@ pip install git+https://github.com/cryptocoinserver/jesse-optuna.git
 # create the config file
 jesse-optuna create-config
 
+sudo -u postgres psql -c "CREATE DATABASE optuna_db;"
+
 # create the database for optuna 
 jesse-optuna create-db optuna_db
 

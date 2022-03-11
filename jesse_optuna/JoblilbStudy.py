@@ -3,6 +3,14 @@ import copy
 import optuna
 import joblib
 import numpy as np
+import psutil, gc
+
+
+ps = psutil.Process()
+def memory_usage_psutil():
+    gc.collect()
+    mem = ps.memory_percent()
+    return mem
 
 class JoblibStudy:
     def __init__(self, **study_parameters):
@@ -15,7 +23,11 @@ class JoblibStudy:
         study_parameters["load_if_exists"] = True
         study = optuna.create_study(**study_parameters)
         study.sampler.reseed_rng()
-        study.optimize(func, n_trials=n_trials, **optimize_parameters, catch=(Exception,))
+        print('have study', memory_usage_psutil())
+        study.optimize(func, n_trials=n_trials, **optimize_parameters, catch=(Exception,), gc_after_trial=True, callbacks=[lambda study, trial: gc.collect()])
+        del study
+        print('del study', memory_usage_psutil())
+        gc.collect()
 
 
     @staticmethod
@@ -30,13 +42,17 @@ class JoblibStudy:
             n_jobs = joblib.cpu_count()
 
         if n_jobs == 1:
-            self.study.optimize(n_trials=n_trials, **optimize_parameters)
+            self.study.optimize(func, n_trials=n_trials, **optimize_parameters)
         else:
             parallel = joblib.Parallel(n_jobs, verbose=10, max_nbytes=None)
             parallel(
                 joblib.delayed(self._optimize_study)(func, n_trials=n_trials_i, **optimize_parameters)
                 for n_trials_i in self._split_trials(n_trials, n_jobs)
             )
+            print('have parallel list', memory_usage_psutil())
+            del parallel
+            print('delete parallel list', memory_usage_psutil())
+            gc.collect()
 
     def set_user_attr(self, key: str, value):
         if isinstance(value, np.integer):
