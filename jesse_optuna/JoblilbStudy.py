@@ -23,10 +23,8 @@ class JoblibStudy:
         study_parameters["load_if_exists"] = True
         study = optuna.create_study(**study_parameters)
         study.sampler.reseed_rng()
-        print('have study', memory_usage_psutil())
-        study.optimize(func, n_trials=n_trials, **optimize_parameters, catch=(Exception,), gc_after_trial=True, callbacks=[lambda study, trial: gc.collect()])
+        study.optimize(func, n_trials=n_trials, **optimize_parameters, catch=(Exception,))
         del study
-        print('del study', memory_usage_psutil())
         gc.collect()
 
 

@@ -1,11 +1,13 @@
 import csv
 import logging
-import os
+import os, sys
 import pathlib
 import pickle
 import shutil
+from time import sleep
 import traceback
 import psutil, gc
+import json
 
 import click
 import jesse.helpers as jh
@@ -14,8 +16,17 @@ import pandas as pd
 import optuna
 import pkg_resources
 import yaml
+from jesse.modes import import_candles_mode
 from jesse.research import backtest, get_candles
 from .JoblilbStudy import JoblibStudy
+from jesse.services import charts
+
+import threading
+from threading import Thread
+
+# fix memory leak
+charts.portfolio_vs_asset_returns = lambda: leak_plug()
+
 
 ps = psutil.Process()
 def memory_usage_psutil():
@@ -81,10 +92,14 @@ def create_db(db_name: str) -> None:
 
 
 @cli.command()
-def run() -> None:
+def run()->None:
+    run_optimization()
+
+def run_optimization(batchmode=False, cfg=None) -> None:
     validate_cwd()
 
-    cfg = get_config()
+    if cfg == None:
+        cfg = get_config()
     study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
     storage = f"postgresql://{cfg['postgres_username']}:{cfg['postgres_password']}@{cfg['postgres_host']}:{cfg['postgres_port']}/{cfg['postgres_db_name']}"
 
@@ -96,7 +111,7 @@ def run() -> None:
     search_space = get_search_space(hp_dict)
 
     if not jh.file_exists(path):
-        search_data = pd.DataFrame(columns=[k for k in search_space.keys()] + ["score"] + [f'testing_{k}' for k in empty_backtest_data.keys()])
+        search_data = pd.DataFrame(columns=[k for k in search_space.keys()] + ["score"] + [f'training_{k}' for k in empty_backtest_data.keys()] + [f'testing_{k}' for k in empty_backtest_data.keys()])
         with open(path, "w") as f:
             search_data.to_csv(f, sep="\t", index=False, na_rep='nan')
 
@@ -126,28 +141,89 @@ def run() -> None:
         study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
                                     storage=storage, load_if_exists=False)
     except optuna.exceptions.DuplicatedStudyError:
-        if click.confirm('Previous study detected. Do you want to resume?', default=True):
-            study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
-                                        storage=storage, load_if_exists=True)
-        elif click.confirm('Delete previous study and start new?', default=False):
+        if batchmode:
             optuna.delete_study(study_name=study_name, storage=storage)
             study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
                                         storage=storage, load_if_exists=False)
         else:
-            print("Exiting.")
-            exit(1)
+            if click.confirm('Previous study detected. Do you want to resume?', default=True):
+                study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
+                                            storage=storage, load_if_exists=True)
+            elif click.confirm('Delete previous study and start new?', default=False):
+                optuna.delete_study(study_name=study_name, storage=storage)
+                study = JoblibStudy(study_name=study_name, direction="maximize", sampler=sampler,
+                                            storage=storage, load_if_exists=False)
+            else:
+                print("Exiting.")
+                exit(1)
 
     study.set_user_attr("strategy_name", cfg['strategy_name'])
     study.set_user_attr("exchange", cfg['exchange'])
     study.set_user_attr("symbol", cfg['symbol'])
     study.set_user_attr("timeframe", cfg['timeframe'])
 
-
     study.optimize(objective, n_jobs=cfg['n_jobs'], n_trials=cfg['n_trials'], gc_after_trial=True)
 
     print_best_params(study)
     save_best_params(study, study_name)
 
+
+@cli.command()
+def batchrun() -> None: 
+    validate_cwd()
+    cfg = get_config()
+    optuna_batch_path = "optuna_batch.json"
+    optuna_batch_path = os.path.abspath(optuna_batch_path)
+    if not os.path.isfile(optuna_batch_path):
+        print("There is no file with symbols which should be optimized.")
+        sleep(0.5)
+        batch_dict = {
+                    "symbols": ["BTC-USDT", "ETH-USDT"]
+                    }
+        with open(optuna_batch_path, 'w') as outfile:
+            json.dump(batch_dict, outfile, indent=4, sort_keys=True)
+        print("I created a file for you at ", optuna_batch_path , ":)")
+        sleep(0.5)
+        print("Please fill in your symbols and restart with: 'jesse-optuna batchrun' again")
+        sleep(0.5)
+        return
+    else:
+        try:
+            with open(optuna_batch_path, 'r', encoding='UTF-8') as dna_settings: 
+                        batch_dict = json.load(dna_settings)
+        except json.JSONDecodeError: 
+            raise (
+            'DNA Settings file is formatted wrong.'
+            )
+        except:
+            raise
+
+        print("Going to run the optimization for the symbols: ", batch_dict["symbols"])
+
+    threads = []
+
+    import_candles_mode.process_status = lambda: dirty_started()
+
+    for i, symbol in enumerate(batch_dict["symbols"]):
+        print("Symbol ", i, " of ", len(batch_dict["symbols"]), " import Candles for ", symbol, " since ", cfg['timespan-testing']['start_date'])
+        thread = Thread(target=import_candles_mode.run, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
+        threads.append(thread)
+    for t in threads: 
+        t.start()
+    while len(threading.enumerate()) > 1: 
+        print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
+        sleep(1)
+    print("successfully imported candles")
+
+    for i, symbol in enumerate(batch_dict["symbols"]):
+        cfg['symbol'] = symbol
+        run_optimization(batchmode=True, cfg=cfg)
+
+def dirty_started():
+    return 'started'
+
+def leak_plug():
+    return 'NONE'
 
 def get_config():
     cfg_file = pathlib.Path('optuna_config.yml')
@@ -182,8 +258,10 @@ def get_search_space(strategy_hps):
     return hp
 
 def objective(trial):
-    print('pre objective', memory_usage_psutil())
     cfg = get_config()
+
+    study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
+    path = f'storage/jesse-optuna/csv/{study_name}.csv'
 
     StrategyClass = jh.get_strategy_class(cfg['strategy_name'])
     hp_dict = StrategyClass().hyperparameters()
@@ -214,14 +292,15 @@ def objective(trial):
     if training_data_metrics is None:
         del training_data_metrics, cfg, StrategyClass, hp_dict
         gc.collect()
-        print('nan1 objective', memory_usage_psutil())
+        #print('nan1 objective', memory_usage_psutil())
         return np.nan
 
 
     if training_data_metrics['total'] <= 5:
+        logger.error("%r" % training_data_metrics)
         del training_data_metrics, cfg, StrategyClass, hp_dict
         gc.collect()
-        print('nan2 objective', memory_usage_psutil())
+        #print('nan2 objective', memory_usage_psutil())
         return np.nan
 
     total_effect_rate = np.log10(training_data_metrics['total']) / np.log10(cfg['optimal-total'])
@@ -252,14 +331,15 @@ def objective(trial):
         raise ValueError(
             f'The entered ratio configuration `{ratio_config}` for the optimization is unknown. Choose between sharpe, calmar, sortino, serenity, smart shapre, smart sortino and omega.')
     
+    score = total_effect_rate * ratio_normalized
+
     if ratio < 2 or training_data_metrics['max_drawdown'] < -2:
+        write_csv(trial.params, score, training_data_metrics=training_data_metrics, testing_data_metrics=None, path=path)
+
         del training_data_metrics, cfg, StrategyClass, hp_dict
         del ratio, total_effect_rate, ratio_config, ratio_normalized
         gc.collect()
-        print('nan3 objective', memory_usage_psutil())
         return np.nan
-
-    score = total_effect_rate * ratio_normalized
 
     try:
         testing_data_metrics = backtest_function(cfg['timespan-testing']['start_date'], cfg['timespan-testing']['finish_date'], trial.params, cfg)
@@ -272,7 +352,7 @@ def objective(trial):
         del ratio, total_effect_rate, ratio_config, ratio_normalized
         del testing_data_metrics
         gc.collect()
-        print('nan4 objective', memory_usage_psutil())
+        #print('nan4 objective', memory_usage_psutil())
         return np.nan
 
     for key, value in testing_data_metrics.items():
@@ -293,10 +373,8 @@ def objective(trial):
             value = value.tolist()
         trial.set_user_attr(f"training-{key}", value)
 
-
-    study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
-    path = f'storage/jesse-optuna/csv/{study_name}.csv'
-
+    write_csv(trial.params, score, training_data_metrics=training_data_metrics, testing_data_metrics=testing_data_metrics, path=path)
+    """
     parameter_dict = trial.params
 
     # save the score in the copy of the dictionary
@@ -310,12 +388,30 @@ def objective(trial):
         writer = csv.writer(f, delimiter='\t')
         fields = parameter_dict.values()
         writer.writerow(fields)
+    """
     del training_data_metrics
     del testing_data_metrics
-    del parameter_dict
     gc.collect()
-    print('post objective', memory_usage_psutil())
+    #print('post objective', memory_usage_psutil())
     return score
+
+def write_csv(parameters, score, training_data_metrics, testing_data_metrics, path) -> None: 
+    parameter_dict = parameters
+    # save the score in the copy of the dictionary
+    parameter_dict["score"] = score
+
+    for key, value in training_data_metrics.items():
+        parameter_dict[f'training_{key}'] = value
+
+    if testing_data_metrics is not None: 
+        for key, value in testing_data_metrics.items():
+            parameter_dict[f'testing_{key}'] = value
+
+    with open(path, "a") as f:
+        writer = csv.writer(f, delimiter='\t')
+        fields = parameter_dict.values()
+        writer.writerow(fields)
+
 
 def validate_cwd() -> None:
     """
@@ -350,7 +446,6 @@ def get_candles_with_cache(exchange: str, symbol: str, start_date: str, finish_d
 def backtest_function(start_date, finish_date, hp, cfg):
     candles = {}
     extra_routes = []
-    print('pre candles', memory_usage_psutil())
     if (cfg['extra_routes']) is not None:
         for extra_route in cfg['extra_routes'].items():
             extra_route = extra_route[1]
@@ -390,22 +485,16 @@ def backtest_function(start_date, finish_date, hp, cfg):
         'warm_up_candles': cfg['warm_up_candles']
     }
 
-    print('pre backtest', memory_usage_psutil())
-    backtest_data = backtest(config, route, extra_routes, candles, hp)['metrics']
-    print('post backtest', memory_usage_psutil())
+    backtest_data_dict = backtest(config, route, extra_routes, candles, hp)
+
+    backtest_data = dict(backtest_data_dict['metrics'])
+    del backtest_data_dict
     del candles
-    gc.collect()
-    print('post del candles', memory_usage_psutil())
     del route
-    gc.collect()
-    print('post del route', memory_usage_psutil())
     del extra_routes
-    gc.collect()
-    print('post del extra_routes', memory_usage_psutil())
     del config
     gc.collect()
-    print('post del config', memory_usage_psutil())
-    gc.collect()
+
     if backtest_data['total'] == 0:
         backtest_data = {'total': 0, 'total_winning_trades': None, 'total_losing_trades': None,
                          'starting_balance': None, 'finishing_balance': None, 'win_rate': None,
