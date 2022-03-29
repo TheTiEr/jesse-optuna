@@ -212,9 +212,9 @@ def batchrun() -> None:
         print("importing candles of symbol", i, " ...")
         t.start()
         t.join()
-    while len(threading.enumerate()) > 1: 
-        print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
-        sleep(1)
+    #while len(threading.enumerate()) > 1: 
+    #    print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
+    #    sleep(1)
     print("successfully imported candles")
 
     for i, symbol in enumerate(batch_dict["symbols"]):
@@ -341,7 +341,7 @@ def objective(trial):
     
     score = total_effect_rate * ratio_normalized
 
-    if ratio < 2 or training_data_metrics['max_drawdown'] < -2:
+    if ratio < 0.8 or training_data_metrics['max_drawdown'] < -3:
         write_csv(trial.params, score, training_data_metrics=training_data_metrics, testing_data_metrics=None, path=path)
 
         del training_data_metrics, cfg, StrategyClass, hp_dict
