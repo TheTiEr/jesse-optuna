@@ -100,6 +100,7 @@ def run_optimization(batchmode=False, cfg=None) -> None:
 
     if cfg == None:
         cfg = get_config()
+    print("Run Study for ", cfg['symbol'])
     study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
     storage = f"postgresql://{cfg['postgres_username']}:{cfg['postgres_password']}@{cfg['postgres_host']}:{cfg['postgres_port']}/{cfg['postgres_db_name']}"
 
@@ -205,11 +206,12 @@ def batchrun() -> None:
     import_candles_mode.process_status = lambda: dirty_started()
 
     for i, symbol in enumerate(batch_dict["symbols"]):
-        print("Symbol ", i, " of ", len(batch_dict["symbols"]), " import Candles for ", symbol, " since ", cfg['timespan-testing']['start_date'])
         thread = Thread(target=import_candles_mode.run, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
         threads.append(thread)
-    for t in threads: 
+    for i, t in enumerate(threads): 
+        print("importing candles of symbol", i, " ...")
         t.start()
+        t.join()
     while len(threading.enumerate()) > 1: 
         print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
         sleep(1)
@@ -217,6 +219,7 @@ def batchrun() -> None:
 
     for i, symbol in enumerate(batch_dict["symbols"]):
         cfg['symbol'] = symbol
+        update_config(cfg)
         run_optimization(batchmode=True, cfg=cfg)
 
 def dirty_started():
@@ -236,6 +239,11 @@ def get_config():
             cfg = yaml.load(ymlfile, yaml.SafeLoader)
 
     return cfg
+
+def update_config(cfg): 
+    cfg_file = pathlib.Path('optuna_config.yml')
+    with open("optuna_config.yml", "w") as ymlfile:
+        yaml.safe_dump(cfg, ymlfile)
 
 def get_search_space(strategy_hps):
     hp = {}
