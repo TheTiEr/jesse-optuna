@@ -1,7 +1,7 @@
 from setuptools import setup, find_packages
 
 # also change in version.py
-VERSION = '0.1.5'
+VERSION = '0.1.6'
 DESCRIPTION = "Bulk backtesting for jesse"
 
 REQUIRED_PACKAGES = [
@@ -17,7 +17,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 setup(
     name='jesse-optuna',
     version=VERSION,
-    author="TheTiEr",
+    author="cryptocoinserver/TheTiEr",
     packages=find_packages(),
     description=DESCRIPTION,
     long_description=long_description,
