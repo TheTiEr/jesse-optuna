@@ -1,20 +1,21 @@
 # sharpe, calmar, sortino, omega, serenity, smart sharpe, smart sortino
-fitness-ratio: 'calmar'
+fitness-ratio: 'smart sharpe'
 optimal-total: 150
 # single / multi
 mode: single
-n_trials: 1000
+n_trials: 100 #20000
+n_trials_detail: 100
 
 # -1 all cpu
-n_jobs: -1
+n_jobs: 10
 
-sampler: 'TPESampler'
+sampler: 'NSGAIISampler'
 
 # NSGAIISampler
-population_size: 300
-mutation_prob: 0.0333
+population_size: 500
+mutation_prob: 0.333
 crossover_prob: 0.6
-swapping_prob: 0.05
+swapping_prob: 0.5
 
 # TPESampler
 consider_prior: True
@@ -30,7 +31,7 @@ warn_independent_sampling: True
 constant_liar: True
 
 strategy_name: 'RaptorMKIV'
-study_name: 'Test1'
+study_name: 'Test5'
 
 starting_balance: 2000
 fee: 0.00075
@@ -39,23 +40,20 @@ futures_leverage_mode: cross
 settlement_currency: USDT
 warm_up_candles: 1000
 exchange: Binance
-symbol: 'LUNA-USDT'
+symbol: 'MANA-USDT'
 timeframe: '15m'
 
 timespan-train:
   start_date: '2021-10-01'
-  finish_date: '2022-01-01'
+  finish_date: '2022-03-01'
 timespan-testing:
   start_date: '2021-01-01'
-  finish_date: '2022-03-08'
+  finish_date: '2022-03-20'
+
 
 extra_routes:
-  0:
-    exchange: 'Binance'
-    symbol: 'LUNA-USDT'
-    timeframe: '15m'
 
-postgres_host: 'postgres'
+postgres_host: 'localhost'
 postgres_db_name: 'optuna_db'
 postgres_port: 5432
 postgres_username: 'jesse_user'

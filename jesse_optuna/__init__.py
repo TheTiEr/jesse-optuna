@@ -1,11 +1,13 @@
 import csv
 import logging
 import os, sys
+from re import T
 import pathlib
 import pickle
 import shutil
 from time import sleep
 import traceback
+from matplotlib.colors import SymLogNorm
 import psutil, gc
 import json
 
@@ -16,17 +18,17 @@ import pandas as pd
 import optuna
 import pkg_resources
 import yaml
-from jesse.modes import import_candles_mode
-from jesse.research import backtest, get_candles
+from jesse.research import backtest, get_candles, import_candles
 from .JoblilbStudy import JoblibStudy
+from .candledates import get_first_and_last_date
 from jesse.services import charts
+
 
 import threading
 from threading import Thread
 
 # fix memory leak
-charts.portfolio_vs_asset_returns = lambda: leak_plug()
-
+#charts.portfolio_vs_asset_returns = lambda: leak_plug()
 
 ps = psutil.Process()
 def memory_usage_psutil():
@@ -93,6 +95,8 @@ def create_db(db_name: str) -> None:
 
 @cli.command()
 def run()->None:
+    cfg = get_config()
+    update_config(cfg)
     run_optimization()
 
 def run_optimization(batchmode=False, cfg=None) -> None:
@@ -100,17 +104,21 @@ def run_optimization(batchmode=False, cfg=None) -> None:
 
     if cfg == None:
         cfg = get_config()
-    print("Run Study for ", cfg['symbol'])
+    print("Run Study for ", cfg['symbol'], " from date: ", cfg['timespan-testing']['start_date'])
     study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
     storage = f"postgresql://{cfg['postgres_username']}:{cfg['postgres_password']}@{cfg['postgres_host']}:{cfg['postgres_port']}/{cfg['postgres_db_name']}"
 
-    path = f'storage/jesse-optuna/csv/{study_name}.csv'
     os.makedirs('./storage/jesse-optuna/csv', exist_ok=True)
+    path = f'storage/jesse-optuna/csv/{study_name}.csv'
+    if "id" in cfg:
+        os.makedirs('./storage/jesse-optuna/csv/best_candidates/detail', exist_ok=True)
+        path = f'storage/jesse-optuna/csv/best_candidates/detail/{study_name}_{cfg["id"]}.csv'
+
 
     StrategyClass = jh.get_strategy_class(cfg['strategy_name'])
-    hp_dict = StrategyClass().hyperparameters()
+    hp_dict = StrategyClass().hyperparameters(cfg['symbol'])
     search_space = get_search_space(hp_dict)
-
+    print("hp_dict",hp_dict)
     if not jh.file_exists(path):
         search_data = pd.DataFrame(columns=[k for k in search_space.keys()] + ["score"] + [f'training_{k}' for k in empty_backtest_data.keys()] + [f'testing_{k}' for k in empty_backtest_data.keys()])
         with open(path, "w") as f:
@@ -203,24 +211,139 @@ def batchrun() -> None:
 
     threads = []
 
-    import_candles_mode.process_status = lambda: dirty_started()
-
     for i, symbol in enumerate(batch_dict["symbols"]):
-        thread = Thread(target=import_candles_mode.run, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
+        thread = Thread(target=import_candles, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
         threads.append(thread)
     for i, t in enumerate(threads): 
         print("importing candles of symbol", i, " ...")
         t.start()
-        t.join()
-    #while len(threading.enumerate()) > 1: 
-    #    print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
-    #    sleep(1)
+        if i == len(threads)-1:
+            t.join()
+    while len(threading.enumerate()) > 2: 
+        print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
+        print(len(threading.enumerate()))
+        sleep(1)
+    # check if candles are imported succesfully for all symbols: 
+    start_date_dict = {}
+    for i, symbol in enumerate(batch_dict["symbols"]):
+        print("checking if all needed candles are imported for symbol {}".format(symbol))
+        succes, start_date, finish_date, message = get_first_and_last_date(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], cfg['timespan-testing']['finish_date'])
+        if not succes: 
+            if start_date is None:
+                print(message)
+                exit()
+            if not message is None: # if first backtestable timestamp is in the future, that means we have some but not enough candles
+                print("Not Enough candles!")
+                print(message)
+                exit()
+            else:
+                print("First available date is {}".format(start_date))
+                print("Changing the start date for this symbol")
+                start_date_dict[symbol] = start_date
+                continue
+
+        start_date_dict[symbol] = cfg['timespan-testing']['start_date']
+        
     print("successfully imported candles")
 
     for i, symbol in enumerate(batch_dict["symbols"]):
+        cfg['timespan-testing']['start_date'] = start_date_dict[symbol]
         cfg['symbol'] = symbol
         update_config(cfg)
-        run_optimization(batchmode=True, cfg=cfg)
+        remove_symbol_from_dna_detail_search_json(symbol)
+        #run_optimization(batchmode=True, cfg=cfg)
+        get_best_candidates(cfg)
+    
+    # widerange search completed. Lets start with the detail search 
+
+    best_dnas = load_best_dnas_json()
+    best_dnas = clean_best_dnas_json(best_dnas)
+    print(best_dnas)
+    print("Start Detail Search of Coins")
+    for i, symbol in enumerate(batch_dict["symbols"]):
+        for bdna in best_dnas[symbol]:
+            cfg['timespan-testing']['start_date'] = start_date_dict[symbol]
+            cfg['symbol'] = symbol
+            cfg['strategy_name'] = cfg['strategy_name']
+            cfg['id'] = bdna
+            cfg['n_trials'] = cfg['n_trials_detail']
+            print(cfg['strategy_name'])
+            update_config(cfg)
+            remove_symbol_from_dna_detail_search_json(symbol)
+            update_dna_detail_search_json(symbol=symbol, new_hps=best_dnas[symbol][bdna])
+            print(best_dnas[symbol][bdna])
+            run_optimization(batchmode=True, cfg=cfg)
+            get_best_candidates(cfg)
+
+def load_best_dnas_json():
+    path_best_dnas = f'optuna_best_dnas.json'
+    if os.path.isfile(path_best_dnas):
+        try:
+            with open(path_best_dnas, 'r', encoding='UTF-8') as dna_settings: 
+                best_dnas_dict = json.load(dna_settings)
+        except json.JSONDecodeError: 
+            print(
+            'DNA Settings file is formatted wrong.'
+            )
+            exit()
+        except:
+            raise
+    else:
+        raise
+
+    return best_dnas_dict
+
+def clean_best_dnas_json(json_file):
+    for symbol in json_file:
+        for key in ['testing_real_net_profit_percentage', 'testing_gross_drawdown', 
+                'testing_real_max_drawdown', 'my_ratio2']:
+            if key in json_file[symbol]:
+                json_file[symbol].pop(key)
+    return json_file
+
+def remove_symbol_from_dna_detail_search_json(symbol):
+    dna_detail_search_path = "strategies/RaptorMKIV/dna_detail_search.json"
+    if os.path.isfile(dna_detail_search_path):
+        try:
+            with open(dna_detail_search_path, 'r', encoding='UTF-8') as dna_settings: 
+                dnadds = json.load(dna_settings)
+        except json.JSONDecodeError: 
+            print(
+            'DNA Settings file is formatted wrong.'
+            )
+            exit()
+        except:
+            print("Error")
+    else:
+        raise
+
+    if symbol in dnadds["Coins"]:
+        dnadds["Coins"].pop(symbol)
+    
+    with open(dna_detail_search_path, 'w', encoding='UTF-8') as dna_settings: 
+        json.dump(dnadds, dna_settings, indent=4, sort_keys=True)
+
+def update_dna_detail_search_json(symbol, new_hps):
+    dna_detail_search_path = "strategies/RaptorMKIV/dna_detail_search.json"
+    if os.path.isfile(dna_detail_search_path):
+        try:
+            with open(dna_detail_search_path, 'r', encoding='UTF-8') as dna_settings: 
+                dnadds = json.load(dna_settings)
+        except json.JSONDecodeError: 
+            print(
+            'DNA Settings file is formatted wrong.'
+            )
+            exit()
+        except:
+            raise
+    else:
+        raise
+
+    dnadds["Coins"][symbol] = new_hps
+
+    with open(dna_detail_search_path, 'w', encoding='UTF-8') as dna_settings: 
+        json.dump(dnadds, dna_settings, indent=4, sort_keys=True)
+
 
 def dirty_started():
     return 'started'
@@ -228,21 +351,23 @@ def dirty_started():
 def leak_plug():
     return 'NONE'
 
-def get_config():
-    cfg_file = pathlib.Path('optuna_config.yml')
+def get_config(run=False):
+    if run: 
+        cfg_file = pathlib.Path('.run_optuna_config.yml')
+    else:
+        cfg_file = pathlib.Path('optuna_config.yml')
 
     if not cfg_file.is_file():
-        print("optuna_config.yml not found. Run create-config command.")
+        print("{} not found. Run create-config command.".format(cfg_file))
         exit()
     else:
-        with open("optuna_config.yml", "r") as ymlfile:
+        with open(cfg_file, "r") as ymlfile:
             cfg = yaml.load(ymlfile, yaml.SafeLoader)
-
     return cfg
 
 def update_config(cfg): 
-    cfg_file = pathlib.Path('optuna_config.yml')
-    with open("optuna_config.yml", "w") as ymlfile:
+    cfg_file = pathlib.Path('.run_optuna_config.yml')
+    with open(cfg_file, "w") as ymlfile:
         yaml.safe_dump(cfg, ymlfile)
 
 def get_search_space(strategy_hps):
@@ -266,13 +391,15 @@ def get_search_space(strategy_hps):
     return hp
 
 def objective(trial):
-    cfg = get_config()
+    cfg = get_config(run=True)
 
     study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
     path = f'storage/jesse-optuna/csv/{study_name}.csv'
+    if 'id' in cfg:
+        path = f'storage/jesse-optuna/csv/best_candidates/detail/{study_name}_{cfg["id"]}.csv'
 
     StrategyClass = jh.get_strategy_class(cfg['strategy_name'])
-    hp_dict = StrategyClass().hyperparameters()
+    hp_dict = StrategyClass().hyperparameters(cfg['symbol'])
 
     for st_hp in hp_dict:
         if st_hp['type'] is int:
@@ -490,10 +617,13 @@ def backtest_function(start_date, finish_date, hp, cfg):
         'futures_leverage_mode': cfg['futures_leverage_mode'],
         'exchange': cfg['exchange'],
         'settlement_currency': cfg['settlement_currency'],
-        'warm_up_candles': cfg['warm_up_candles']
+        'warm_up_candles': cfg['warm_up_candles'],
     }
 
-    backtest_data_dict = backtest(config, route, extra_routes, candles, hp)
+    backtest_data_dict = backtest(config, route, extra_routes, candles, hyperparameters=dict(hp))
+    #print("hp", hp)
+    #hp {'tp': 34, 'price_deviation': 294, 'so_scale': 22, 'ifrsi_buy_limit': -56, 'ifrsi_sell_limit': 24, 'buy_limiter': 20, 'ifrsi_buy_length': 27, 'ifrsi_buy_smooth_length': 48, 'ifrsi_sell_length': 29, 'ifrsi_sell_smooth_length': 64, 'buy_booster': 127, 'sell_booster': 49, 'macd_fast_buy': 87, 'macd_slow_buy': 258, 'macd_trigger_buy': 111, 'macd_fast_sell': 58, 'macd_slow_sell': 256, 'macd_trigger_sell': 167}
+
 
     backtest_data = dict(backtest_data_dict['metrics'])
     del backtest_data_dict
@@ -538,3 +668,153 @@ def save_best_params(study, study_name: str):
         for trial in trials:
             f.write(
                 f"Trial: {trial.number} Values: {trial.values} Params: {trial.params}\n") 
+
+
+def get_best_candidates(cfg): 
+    study_name = f"{cfg['study_name']}-{cfg['strategy_name']}-{cfg['exchange']}-{cfg['symbol']}-{cfg['timeframe']}"
+    path = f'storage/jesse-optuna/csv/{study_name}.csv'
+    if "id" in cfg:
+        path = f'storage/jesse-optuna/csv/best_candidates/detail/{study_name}_{cfg["id"]}.csv'
+    print("get the best candidates from", path)
+    testresults = pd.read_csv(path, sep='\t')
+    testing_dnas = testresults[testresults['testing_total'] > 0]
+    testing_dnas = testing_dnas[testing_dnas['testing_win_rate'] > 0.85]
+    
+    # calculate real profit
+    testing_dnas['testing_real_net_profit_percentage'] = testing_dnas.testing_net_profit / 1000.0 * 100
+    #calculate the real cumulated drawdown
+    testing_dnas['testing_gross_drawdown'] = testing_dnas.testing_gross_loss / 1000.0 * 100
+    #calculate the real drawdown
+    testing_dnas['testing_real_max_drawdown'] = testing_dnas.testing_largest_losing_trade / 1000.0 * 100
+
+    # calculate 
+    testing_dnas['my_ratio'] = -(testing_dnas.testing_real_max_drawdown*testing_dnas.testing_real_max_drawdown) / (testing_dnas.testing_real_net_profit_percentage*testing_dnas.testing_real_net_profit_percentage) \
+                                * testing_dnas.testing_longs_count * testing_dnas.testing_calmar_ratio
+
+    testing_dnas['my_ratio2'] = testing_dnas.testing_real_net_profit_percentage - (testing_dnas.testing_real_max_drawdown*testing_dnas.testing_real_max_drawdown) + 3*testing_dnas.testing_gross_drawdown \
+                                * testing_dnas.testing_longs_count **(1/5) * testing_dnas.testing_win_rate
+
+    # filter dnas with a drawdown > 5% 
+    testing_dnas = testing_dnas[testing_dnas['testing_real_max_drawdown'] > -5]
+
+    #testing_dnas = testing_dnas.sort_values(by=['testing_net_profit'], ascending=False)
+    testing_dnas = testing_dnas.sort_values(by=['my_ratio2'], ascending=False)
+    print("dcdctesting_dnas", testing_dnas  )
+    path_csv_best_candidates = 'storage/jesse-optuna/csv/best_candidates'
+    os.makedirs(path_csv_best_candidates, exist_ok=True)
+    path = f'{path_csv_best_candidates}/{study_name}_widerange.csv'
+    if "id" in cfg:
+        path_csv_best_candidates = 'storage/jesse-optuna/csv/best_candidates/detail'
+        os.makedirs(path_csv_best_candidates, exist_ok=True)
+        path = f'{path_csv_best_candidates}/{study_name}_{cfg["id"]}.csv'
+    testing_dnas.to_csv(path)
+
+
+    # get all used parameters in this strategy
+    StrategyClass = jh.get_strategy_class(cfg['strategy_name'])
+    hp_dict = StrategyClass().hyperparameters()
+
+    hps = [hp['name'] for hp in hp_dict]
+    for param in ['testing_real_net_profit_percentage', 'testing_gross_drawdown', 'testing_real_max_drawdown', 'my_ratio2']:
+        hps.append(param)
+
+    best_dnas_dict = {}
+    if not "id" in cfg:
+        # save the best 5 results in a json file: 
+        # read the existing file if it exitsts:
+        path_best_dnas = f'optuna_best_dnas.json'
+        if os.path.isfile(path_best_dnas):
+            try:
+                with open(path_best_dnas, 'r', encoding='UTF-8') as best_dnas_file: 
+                    best_dnas_dict = json.load(best_dnas_file)
+            except json.JSONDecodeError: 
+                raise (
+                'Best DNAs file is formatted wrong.'
+                )
+            except:
+                raise
+
+    print("Testing dna", testing_dnas)
+    best_dnas = {}
+    #check if there enough dnas
+    dna_count = 5 if testing_dnas.shape[0] >=5 else testing_dnas.shape[0]
+    if dna_count == 0: 
+        print("Backtest has no results.")
+        return
+    for i in range(dna_count):
+        res_row = testing_dnas.iloc[[i]]
+        dna_list = {'id': int(res_row.index[0])}
+        for hp in hps:
+            dna_list[hp] = res_row.iloc[0][hp]
+        best_dnas[dna_list['id']]  = dna_list
+    
+    best_dnas_dict[cfg['symbol']] = best_dnas
+
+    if not "id" in cfg:
+        # only save the best candidates in a json file if we are in a widerange search
+        with open(path_best_dnas, 'w', encoding='UTF-8') as best_dnas_file: 
+            json.dump(best_dnas_dict, best_dnas_file)
+
+    if not "id" in cfg:
+        create_charts(best_dnas, path_csv_best_candidates, study_name)
+    else:
+        create_charts(best_dnas, path_csv_best_candidates, study_name, cfg["id"])
+
+def create_charts(best_dnas, path_csv_best_candidates, study_name, detail_id=None):
+    # create charts for the best 5 candidates 
+    for dna in best_dnas:
+        print("Create the Chart for id", dna)
+        # load candles 
+        candles = {}
+        extra_routes = []
+
+        cfg = get_config(run=True)
+        start_date = cfg['timespan-testing']['start_date']
+        finish_date = cfg['timespan-testing']['finish_date']
+
+
+        if (cfg['extra_routes']) is not None:
+            for extra_route in cfg['extra_routes'].items():
+                extra_route = extra_route[1]
+                candles[jh.key(extra_route['exchange'], extra_route['symbol'])] = {
+                    'exchange': extra_route['exchange'],
+                    'symbol': extra_route['symbol'],
+                    'candles': get_candles_with_cache(
+                        extra_route['exchange'],
+                        extra_route['symbol'],
+                        start_date,
+                        finish_date,
+                    ),
+                }
+                extra_routes.append({'exchange': extra_route['exchange'], 'symbol': extra_route['symbol'],
+                                    'timeframe': extra_route['timeframe']})
+        candles[jh.key(cfg['exchange'], cfg['symbol'])] = {
+            'exchange': cfg['exchange'],
+            'symbol': cfg['symbol'],
+            'candles': get_candles_with_cache(
+                cfg['exchange'],
+                cfg['symbol'],
+                start_date,
+                finish_date,
+            ),
+        }
+
+        route = [{'exchange': cfg['exchange'], 'strategy': cfg['strategy_name'], 'symbol': cfg['symbol'],
+                'timeframe': cfg['timeframe']}]
+
+        config = {
+            'starting_balance': cfg['starting_balance'],
+            'fee': cfg['fee'],
+            'futures_leverage': cfg['futures_leverage'],
+            'futures_leverage_mode': cfg['futures_leverage_mode'],
+            'exchange': cfg['exchange'],
+            'settlement_currency': cfg['settlement_currency'],
+            'warm_up_candles': cfg['warm_up_candles'],
+        }
+        backtest_data_dict = backtest(config, route, extra_routes, candles, generate_charts=True, hyperparameters=dict(best_dnas[dna]))
+
+        if "charts" in backtest_data_dict:
+            path = f'{path_csv_best_candidates}/{study_name}_{dna}.png'
+            if detail_id is not None:
+                path = f'{path_csv_best_candidates}/{study_name}_{detail_id}_{dna}.png'
+            shutil.copyfile(backtest_data_dict["charts"], path)
