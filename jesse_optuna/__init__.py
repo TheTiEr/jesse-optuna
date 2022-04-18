@@ -216,8 +216,8 @@ def batchrun() -> None:
     for i, t in enumerate(threads): 
         print("importing candles of symbol", i, " ...")
         t.start()
-        if i == len(threads)-1:
-            t.join()
+        #if i == len(threads)-1:
+        t.join()
     while len(threading.enumerate()) > 2: 
         print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
         print(len(threading.enumerate()))
