@@ -698,7 +698,7 @@ def get_best_candidates(cfg):
 
     #testing_dnas = testing_dnas.sort_values(by=['testing_net_profit'], ascending=False)
     testing_dnas = testing_dnas.sort_values(by=['my_ratio2'], ascending=False)
-    print("dcdctesting_dnas", testing_dnas  )
+
     path_csv_best_candidates = 'storage/jesse-optuna/csv/best_candidates'
     os.makedirs(path_csv_best_candidates, exist_ok=True)
     path = f'{path_csv_best_candidates}/{study_name}_widerange.csv'
@@ -733,7 +733,6 @@ def get_best_candidates(cfg):
             except:
                 raise
 
-    print("Testing dna", testing_dnas)
     best_dnas = {}
     #check if there enough dnas
     dna_count = 5 if testing_dnas.shape[0] >=5 else testing_dnas.shape[0]
