@@ -1,7 +1,6 @@
 import csv
 import logging
 import os, sys
-from re import T
 import pathlib
 import pickle
 import shutil
