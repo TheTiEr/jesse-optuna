@@ -250,7 +250,7 @@ def batchrun() -> None:
         cfg['symbol'] = symbol
         update_config(cfg)
         remove_symbol_from_dna_detail_search_json(symbol)
-        #run_optimization(batchmode=True, cfg=cfg)
+        run_optimization(batchmode=True, cfg=cfg)
         get_best_candidates(cfg)
     
     # widerange search completed. Lets start with the detail search 
