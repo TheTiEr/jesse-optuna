@@ -260,6 +260,9 @@ def batchrun() -> None:
     print(best_dnas)
     print("Start Detail Search of Coins")
     for i, symbol in enumerate(batch_dict["symbols"]):
+        if not symbol in best_dnas:
+            print("No best candidates found for: ", symbol)
+            continue
         for bdna in best_dnas[symbol]:
             cfg['timespan-testing']['start_date'] = start_date_dict[symbol]
             cfg['symbol'] = symbol
