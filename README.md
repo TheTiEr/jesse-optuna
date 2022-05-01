@@ -8,7 +8,7 @@ The config.yml should be self-explainatory.
 
 ```sh
 # install from git
-pip install git+https://github.com/cryptocoinserver/jesse-optuna.git
+pip install git+https://github.com/TheTiEr/jesse-optuna.git
 
 # cd in your Jesse project directory
 
