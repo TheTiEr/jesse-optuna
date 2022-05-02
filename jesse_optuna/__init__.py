@@ -121,7 +121,7 @@ def run_optimization(batchmode=False, cfg=None) -> None:
     if not jh.file_exists(path):
         search_data = pd.DataFrame(columns=[k for k in search_space.keys()] + ["score"] + [f'training_{k}' for k in empty_backtest_data.keys()] + [f'testing_{k}' for k in empty_backtest_data.keys()])
         with open(path, "w") as f:
-            search_data.to_csv(f, sep="\t", index=False, na_rep='nan', lineterminator='\n')
+            search_data.to_csv(f, sep="\t", index=False, na_rep='nan', line_terminator='\n')
 
     if (cfg['sampler'] == 'NSGAIISampler'):
             sampler = optuna.samplers.NSGAIISampler(population_size=cfg['population_size'], 
@@ -709,7 +709,7 @@ def get_best_candidates(cfg):
         path_csv_best_candidates = 'storage/jesse-optuna/csv/best_candidates/detail'
         os.makedirs(path_csv_best_candidates, exist_ok=True)
         path = f'{path_csv_best_candidates}/{study_name}_{cfg["id"]}.csv'
-    testing_dnas.to_csv(path, sep='\t', na_rep='nan', lineterminator='\n')
+    testing_dnas.to_csv(path, sep='\t', na_rep='nan', line_terminator='\n')
 
 
     # get all used parameters in this strategy
