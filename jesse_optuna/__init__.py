@@ -678,7 +678,7 @@ def get_best_candidates(cfg):
     if "id" in cfg:
         path = f'storage/jesse-optuna/csv/best_candidates/detail/{study_name}_{cfg["id"]}.csv'
     print("get the best candidates from", path)
-    testresults = pd.read_csv(path, sep='\t')
+    testresults = pd.read_csv(path, sep='\t', lineterminator='\n')
     testing_dnas = testresults[testresults['testing_total'] > 0]
     testing_dnas = testing_dnas[testing_dnas['testing_win_rate'] > 0.85]
     
