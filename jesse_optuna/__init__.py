@@ -211,7 +211,7 @@ def batchrun() -> None:
     threads = []
 
     for i, symbol in enumerate(batch_dict["symbols"]):
-        thread = Thread(target=import_candles, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
+        thread = Thread(target=import_candles, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], False))
         threads.append(thread)
     for i, t in enumerate(threads): 
         print("importing candles of symbol", i, " ...")
