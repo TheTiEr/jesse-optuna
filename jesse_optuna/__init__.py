@@ -209,9 +209,8 @@ def batchrun() -> None:
         print("Going to run the optimization for the symbols: ", batch_dict["symbols"])
 
     threads = []
+
     for i, symbol in enumerate(batch_dict["symbols"]):
-        import_candles(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True)
-    """for i, symbol in enumerate(batch_dict["symbols"]):
         thread = Thread(target=import_candles, args=(cfg['exchange'], str(symbol), cfg['timespan-testing']['start_date'], True))
         threads.append(thread)
     for i, t in enumerate(threads): 
@@ -222,7 +221,7 @@ def batchrun() -> None:
     while len(threading.enumerate()) > 2: 
         print("Waiting for ", int((len(threading.enumerate())-1)/2), " candle imports to finish")
         print(len(threading.enumerate()))
-        sleep(1)"""
+        sleep(1)
     # check if candles are imported succesfully for all symbols: 
     start_date_dict = {}
     for i, symbol in enumerate(batch_dict["symbols"]):
