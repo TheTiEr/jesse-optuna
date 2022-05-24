@@ -142,10 +142,7 @@ def run_optimization(batchmode=False, cfg=None) -> None:
             warn_independent_sampling=cfg['warn_independent_sampling'],
             constant_liar=cfg['constant_liar'])
     elif (cfg['sampler'] == 'GridSampler'):
-        grid_search_space = {}
-        for p in hp_dict:
-            grid_search_space[p['name']] = [p['min'], p['max']]
-        sampler = optuna.samplers.GridSampler(search_space=grid_search_space)
+        sampler = optuna.samplers.GridSampler(search_space=search_space)
 
     optuna.logging.enable_propagation()
     optuna.logging.disable_default_handler()
