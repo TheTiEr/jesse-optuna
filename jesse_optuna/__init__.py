@@ -141,6 +141,11 @@ def run_optimization(batchmode=False, cfg=None) -> None:
             group=cfg['group'],
             warn_independent_sampling=cfg['warn_independent_sampling'],
             constant_liar=cfg['constant_liar'])
+    elif (cfg['sampler'] == 'GridSampler'):
+        grid_search_space = {}
+        for p in hp_dict:
+            grid_search_space[p['name']] = [p['min'], p['max']]
+        sampler = optuna.samplers.GridSampler(search_space=grid_search_space)
 
     optuna.logging.enable_propagation()
     optuna.logging.disable_default_handler()
@@ -170,6 +175,7 @@ def run_optimization(batchmode=False, cfg=None) -> None:
     study.set_user_attr("symbol", cfg['symbol'])
     study.set_user_attr("timeframe", cfg['timeframe'])
 
+    print("start optimization")
     study.optimize(objective, n_jobs=cfg['n_jobs'], n_trials=cfg['n_trials'], gc_after_trial=True)
 
     print_best_params(study)
